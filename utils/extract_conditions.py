@@ -1,3 +1,5 @@
+import os
+import re
 import torchaudio
 import numpy as np
 from scipy.signal import savgol_filter
@@ -10,14 +12,13 @@ import torch
 import torchaudio
 import librosa
 import numpy as np
+import pandas as pd
 
 
-def compute_melody_v2(stereo_audio: torch.Tensor) -> np.ndarray:
+def compute_melody_v2(stereo_audio:str) -> np.ndarray:
     """
     Args:
-        stereo_audio: torch.Tensor of shape (2, N), 其中 stereo_audio[0] 是左聲道,
-                      stereo_audio[1] 是右聲道。
-        sr:           取樣率 (sampling rate)。
+            stereo_audio (str): Path to a stereo audio file (e.g., WAV, MP3).
     Returns:
         c: np.ndarray of shape (8, T_frames)，
            每一列代表： [L1, R1, L2, R2, L3, R3, L4, R4]（按 frame 交錯），
@@ -90,7 +91,7 @@ def keep_top4_pitches_per_channel(cqt_db):
             # We add to it in case there's overlap between channels
             combined[top4_indices, t] = 1
     return combined
-def compute_melody(input_audio):
+def compute_melody(input_audio:str) -> np.ndarray:
     # Initialize parameters
     sample_rate = 44100
 
@@ -112,16 +113,58 @@ def compute_melody(input_audio):
     melody = keep_top4_pitches_per_channel(melody)    
     return melody
 
-def compute_dynamics(audio_file, hop_length=160, target_sample_rate=44100, cut=True):
+def compute_drops(audio_file:str, target_file:str, n_fft:int=1024, hop_length:int=160, target_sample_rate:int=44100, cut:bool=True) -> np.ndarray:
+    """Compute the drop curve for a given audio file
+
+    Args:
+        audio_file (str): Path to the audio file.
+        target_file (str): Path to the target file.
+        nfft (int, optional): Length of the FFT. Defaults to 1024.
+        hop_length (int, optional): Length of the hop between STFT frames. Defaults to 160.
+        target_sample_rate (int, optional): Target sample rate for the audio. Defaults to 44100.
+        cut (bool, optional): Whether to cut the audio to a fixed length. Defaults to True.
+    """
+    # Load audio file
+    waveform, original_sample_rate = torchaudio.load(audio_file)
+    if original_sample_rate != target_sample_rate:
+        resampler = torchaudio.transforms.Resample(orig_freq=original_sample_rate, new_freq=target_sample_rate)
+        waveform = resampler(waveform)
+    if cut:
+        waveform = waveform[:, :2097152]
+        
+    # Calculate length of feature curve
+    feature_length = waveform.size(1) // hop_length
+    
+    target_df = pd.read_csv(target_file)
+    audio_chunk_name = os.path.basename(audio_file)
+    
+    regex = re.search(r"(\d+)_chunk(\d+)\.wav", audio_chunk_name) #Chunk files are .wav
+    assert regex is not None, f"Filename {audio_chunk_name} does not match expected pattern."
+    chunk_nr = regex.group(2)
+    start_index = int(chunk_nr) * 2097152
+    filename = regex.group(1) + ".mp3" # Original files are .mp3
+    
+    df_index = target_df['file'].str.contains(filename).idxmax()
+    target_seconds = np.trim_zeros(target_df.iloc[df_index][1:].to_numpy(dtype=np.float32).reshape(-1))
+    target_indices = (target_seconds * target_sample_rate).astype(int) - start_index
+    #remvoe indices smaller than 0 or larger than 2097152
+    target_indices = target_indices[(target_indices >= 0) & (target_indices < 2097152)]
+    target_indices = target_indices // hop_length
+    drop_curve = np.zeros(feature_length)
+    drop_curve[target_indices] = 1
+    return drop_curve
+    
+    
+
+def compute_dynamics(audio_file:str, hop_length:int=160, target_sample_rate:int=44100, cut:bool=True) -> np.ndarray:
     """
     Compute the dynamics curve for a given audio file.
     
     Args:
         audio_file (str): Path to the audio file.
-        window_length (int): Length of FFT window for computing the spectrogram.
-        hop_length (int): Number of samples between successive frames.
-        smoothing_window (int): Length of the Savitzky-Golay filter window.
-        polyorder (int): Polynomial order of the Savitzky-Golay filter.
+        hop_length (int, optional): Length of the hop between STFT frames. Defaults to 160.
+        target_sample_rate (int, optional): Target sample rate for the audio. Defaults to 44100.
+        cut (bool, optional): Whether to cut the audio to a fixed length. Defaults to True.
 
     Returns:
         dynamics_curve (numpy.ndarray): The computed dynamic values in dB.
@@ -143,14 +186,16 @@ def compute_dynamics(audio_file, hop_length=160, target_sample_rate=44100, cut=T
     energy = np.sum(S**2, axis=0)
     dynamics_db = np.clip(energy, 1e-6, None)
     dynamics_db = librosa.amplitude_to_db(energy, ref=np.max).squeeze(0)
-    smoothed_dynamics = savgol_filter(dynamics_db, window_length=279, polyorder=1)
+    smoothed_dynamics:np.ndarray = savgol_filter(dynamics_db, window_length=279, polyorder=1)
     # print(smoothed_dynamics.shape)
     return smoothed_dynamics
-def extract_melody_one_hot(audio_path,
-                           sr=44100,
-                           cutoff=261.2, 
-                           win_length=2048,
-                           hop_length=256):
+
+
+def extract_melody_one_hot(audio_path:str,
+                           sr:int=44100,
+                           cutoff:float=261.2, 
+                           win_length:int=2048,
+                           hop_length:int=256) -> np.ndarray:
     """
     Extract a one-hot chromagram-based melody from an audio file (mono).
     
@@ -222,7 +267,7 @@ def extract_melody_one_hot(audio_path,
     one_hot_chroma[pitch_class_idx, np.arange(chroma.shape[1])] = 1.0
     
     return one_hot_chroma
-def evaluate_f1_rhythm(input_timestamps, generated_timestamps, tolerance=0.07):
+def evaluate_f1_rhythm(input_timestamps:np.ndarray, generated_timestamps:np.ndarray, tolerance:float=0.07) -> tuple[float, float, float]:
     """
     Evaluates precision, recall, and F1-score for beat/downbeat timestamp alignment.
     
