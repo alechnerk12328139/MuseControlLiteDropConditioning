@@ -42,7 +42,7 @@ from madmom.features import RNNBeatProcessor, DBNBeatTrackingProcessor
 from madmom.features.downbeats import DBNDownBeatTrackingProcessor,RNNDownBeatProcessor
 ### same way as stable audio loads audio file
 import gc
-torchaudio.set_audio_backend("sox_io")
+#torchaudio.set_audio_backend("sox_io")
 import time
 
 class AudioInversionDataset(Dataset):
@@ -79,31 +79,35 @@ class AudioInversionDataset(Dataset):
         audio_path = meta_entry.get('path')
     
         # Build file paths
-        def build_path(root, path, ext_in='.mp3', ext_out='.npy'):
-            file_name = path.replace("/", "_").replace(ext_in, ext_out)
+        def build_path(root, path, ext_in='.wav', ext_out='.npy'):
+            file_name = os.path.basename(path).replace(ext_in, ext_out)
             return os.path.join(root, file_name)
         # Load numpy arrays concurrently
         def load_npy(path):
             return np.load(path) 
         if "melody" in self.config['condition_type']:
-            melody_path = build_path("../mtg_full_47s_conditions/filtered_no_singer_melody_test_new_v2", audio_path)
+            melody_path = build_path("./mtg_full_47s_conditions/melody_condition_dir/", audio_path)
             melody_curve = load_npy(melody_path)
         else:
             melody_curve = np.zeros((128, 4097))
         if "rhythm" in self.config['condition_type']:
-            rhythm_path = build_path("../mtg_full_47s_conditions/filtered_no_singer_rhythm_test", audio_path)
+            rhythm_path = build_path("./mtg_full_47s_conditions/rhythm_condition_dir/", audio_path)
             rhythm_curve = load_npy(rhythm_path)
         else:
             rhythm_curve = np.zeros((4756, 2))
         if "dynamics" in self.config['condition_type']:
-            dynamics_path = build_path("../mtg_full_47s_conditions/filtered_no_singer_dynamics_test", audio_path)
+            dynamics_path = build_path("./mtg_full_47s_conditions/dynamics_condition_dir/", audio_path)
             dynamics_curve = load_npy(dynamics_path)
         else:
             dynamics_curve = np.zeros((13108,))
-        
+        if "drop" in self.config['condition_type']:
+            drop_path = build_path("./mtg_full_47s_conditions/drop_condition_dir/", audio_path)
+            drop_curve = load_npy(drop_path)
+        else:
+            drop_curve = np.zeros((13107,))
         # Load audio tokens, they are encoded with the Stable-audio VAE and saved, skipping the the VAE encoding process saves memory when training MuseControlLite
-        audio_full_path = os.path.join(self.audio_data_root, audio_path)
-        audio_token_path = os.path.join(self.audio_codec_root, audio_path.replace('mp3', 'pth'))
+        audio_full_path = audio_path if os.path.isabs(audio_path) else os.path.join(self.audio_data_root, audio_path)
+        audio_token_path = audio_full_path.replace('.wav', '.pth')
         audio = torch.load(audio_token_path, map_location=torch.device('cpu'))
         
         example = {
@@ -113,6 +117,7 @@ class AudioInversionDataset(Dataset):
             "melody_curve": melody_curve,
             "rhythm_curve": rhythm_curve,
             "dynamics_curve": dynamics_curve,
+            "drop_curve": drop_curve,
             "seconds_start": 0,
             "seconds_end": 2097152 / 44100,
         }
@@ -131,12 +136,15 @@ class CollateFunction:
             dynamics_condition = [example["dynamics_curve"] for example in examples]
             melody_condition = [example["melody_curve"] for example in examples]
             rhythm_condition = [example["rhythm_curve"] for example in examples]
+            drop_condition = [example["drop_curve"] for example in examples]
             rhythm_condition = [torch.tensor(cond) for cond in rhythm_condition]
             rhythm_condition = torch.stack(rhythm_condition).transpose(2,1)
             dynamics_condition = [torch.tensor(cond) for cond in dynamics_condition]
             dynamics_condition = torch.stack(dynamics_condition)
             melody_condition = [torch.tensor(cond) for cond in melody_condition]
             melody_condition = torch.stack(melody_condition)
+            drop_condition = [torch.tensor(cond) for cond in drop_condition]
+            drop_condition = torch.stack(drop_condition)
             audio = torch.stack(audio).float()   
             batch = {
                 "audio_full_path": audio_full_path,
@@ -144,6 +152,7 @@ class CollateFunction:
                 "rhythm_condition": rhythm_condition,
                 "dynamics_condition": dynamics_condition,
                 "melody_condition": melody_condition,
+                "drop_condition": drop_condition,
                 "prompt_texts": prompt_texts,
                 "seconds_start": seconds_start,
                 "seconds_end": seconds_end,
@@ -213,6 +222,24 @@ class rhythm_extractor(nn.Module):
         x = self.conv1d_4(x) # shape: (batchsize, 128, 1500)
         x = F.silu(x)
         x = self.conv1d_5(x) # shape: (batchsize, 192, 750)
+        return x
+    
+class drop_extractor(nn.Module):
+    def __init__(self):
+        super(drop_extractor, self).__init__()
+        self.conv1d_1 = nn.Conv1d(1, 16, kernel_size=3, padding=1)
+        self.conv1d_2 = nn.Conv1d(16, 64, kernel_size=3, padding=1)
+        self.conv1d_3 = nn.Conv1d(64, 128, kernel_size=3, padding=1)
+        self.conv1d_4 = nn.Conv1d(128, 192, kernel_size=3, padding=1)
+    def forward(self, x):
+        x = self.conv1d_1(x)
+        x = F.silu(x)
+        x = self.conv1d_2(x)
+        x = F.silu(x)
+        x = self.conv1d_3(x)
+        x = F.silu(x)
+        x = self.conv1d_4(x)
+
         return x
 
 def log_validation(val_dataloader, condition_extractors, condition_type, pipeline, config, weight_dtype, global_step):
@@ -366,6 +393,9 @@ def log_validation(val_dataloader, condition_extractors, condition_type, pipelin
             plt.tight_layout()
             plt.savefig(os.path.join(val_audio_dir, f"compare_rhythm_{step}.png"))
             plt.close()
+        if "drop" in condition_type:
+            #TODO: add drop curve evaluation and visualization
+            pass
         discription_path = os.path.join(val_audio_dir, "description.txt")
         with open(discription_path, 'a') as file:
             file.write(f'{prompt_texts}\n')
@@ -435,6 +465,8 @@ def main():
     condition_extractors["dynamics"] = dynamics_conditoner
     rhythm_conditoner = rhythm_extractor().cuda().float()
     condition_extractors["rhythm"] = rhythm_conditoner
+    drop_conditoner = drop_extractor().cuda().float()
+    condition_extractors["drop"] = drop_conditoner
     for conditioner in condition_extractors.values():
         conditioner.requires_grad_(True)
 
@@ -444,6 +476,8 @@ def main():
             state_dict = torch.load(ckpt_path)
         elif "safetensors" in ckpt_path:
             state_dict = load_file(ckpt_path, device="cpu")
+        else:
+            raise ValueError("Unsupported checkpoint format. Please provide a .bin or .safetensors file.")
         condition_extractors[conditioner_type].load_state_dict(state_dict)
         print(f"load checkpoint from {config['extractor_ckpt']} successfully !")
 
@@ -478,6 +512,8 @@ def main():
             state_dict = torch.load(config["transformer_ckpt"])
         elif "safetensors" in config["transformer_ckpt"]:
             state_dict = load_file(config["transformer_ckpt"], device="cpu")
+        else:
+            raise ValueError("Unsupported checkpoint format. Please provide a .bin or .safetensors file.")
         for name, processor in attn_procs.items():
             if isinstance(processor, attn_processor):
                 weight_name_v = name + ".to_v_ip.weight"

@@ -2,22 +2,22 @@ def get_config():
     return {
         # Load files and checkpoints
 
-        "condition_type": ["melody"], #"melody", "rhythm", "dynamics", "audio"
+        "condition_type": ["melody"], #["melody", "rhythm", "dynamics", "drop"], #"melody", "rhythm", "dynamics", "audio", "drop"
 
-        "meta_data_path": "./ALL_condition_wo_SDD.json",
+        "meta_data_path": "./mtg_full_47s_conditions/filtered_vocal_all_caption_with_conditions.json",
 
-        "audio_data_dir": "../mtg_full_47s",
+        "audio_data_dir": "D:/Datasets/drops-47s/house/",
 
-        "audio_codec_root": "../mtg_full_47s_codec",
+        "audio_codec_root": "D:/Datasets/drops-47s/house/",
 
-        "output_dir": "./checkpoints/stable_audio_melody_wo_SDD",
+        "output_dir": "./checkpoints/stable_audio_all_condition",
 
         "transformer_ckpt": None, #"./checkpoints/stable_audio_melody_wo_SDD/checkpoint-5000/model_1.safetensors",
 
         "extractor_ckpt": {
-            # "dynamics": "./checkpoints/110000_musical_44000_audio/model_1.safetensors",
-            # "melody": "./checkpoints/stable_audio_melody_wo_SDD/checkpoint-5000/model.safetensors",
-            # "rhythm": "./checkpoints/110000_musical_44000_audio/model_2.safetensors",
+             #"dynamics": "./checkpoints/110000_musical_44000_audio/model_1.safetensors",
+             #"melody": "./checkpoints/stable_audio_melody_wo_SDD/checkpoint-5000/model.safetensors",
+             #"rhythm": "./checkpoints/110000_musical_44000_audio/model_2.safetensors",
         },
 
         "wand_run_name": "test",
@@ -25,13 +25,13 @@ def get_config():
         # training hyperparameters
         "GPU_id" : "0",
 
-        "train_batch_size": 8,
+        "train_batch_size": 1,
 
         "learning_rate": 1e-4,
 
         "attn_processor_type": "rotary", # "rotary", "rotary_conv_in", "absolute" 
 
-        "gradient_accumulation_steps": 4,
+        "gradient_accumulation_steps": 1,
 
         "max_train_steps": 200000,
 
@@ -48,7 +48,7 @@ def get_config():
         "weight_decay": 1e-2,
 
         #config for validation
-        "validation_num": 1000,
+        "validation_num": 30,
 
         "test_num": 5,
 

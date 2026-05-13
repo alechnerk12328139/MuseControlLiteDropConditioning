@@ -41,7 +41,7 @@ class AudioInversionDataset(Dataset):
         meta_entry = self.meta[i]
         audio_path = meta_entry.get('path')
         # Load audio
-        audio_full_path = os.path.join(self.audio_data_root, audio_path)
+        audio_full_path = audio_path if os.path.isabs(audio_path) else os.path.join(self.audio_data_root, audio_path)
         audio = load_audio_file(audio_full_path)
 
         # Apply augmentations and encoding
@@ -114,7 +114,7 @@ if __name__ == "__main__":
         with torch.no_grad():
             latents = vae.encode(batch['audio'].to(dtype=torch.float16).to("cuda")).latent_dist.sample()
         for i in range(latents.shape[0]):
-            latent_path = os.path.join(latent_dir, batch['audio_full_path'][i].replace('.mp3', '.pth'))
+            latent_path = os.path.join(latent_dir, batch['audio_full_path'][i].replace('.wav', '.pth'))
             os.makedirs(os.path.dirname(latent_path), exist_ok=True)
             print("latent_path", latent_path)
             torch.save(latents[i], latent_path)
