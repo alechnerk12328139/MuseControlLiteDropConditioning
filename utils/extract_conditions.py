@@ -14,6 +14,10 @@ import librosa
 import numpy as np
 import pandas as pd
 
+import utils.helpers as hlp
+from utils.drop_detection_network import SimpleCNN3, AudioPipeline
+
+
 
 def compute_melody_v2(stereo_audio:str) -> np.ndarray:
     """
@@ -113,7 +117,7 @@ def compute_melody(input_audio:str) -> np.ndarray:
     melody = keep_top4_pitches_per_channel(melody)    
     return melody
 
-def compute_drops(audio_file:str, target_file:str, n_fft:int=1024, hop_length:int=160, target_sample_rate:int=44100, cut:bool=True) -> np.ndarray:
+def compute_drops(audio_file:str, target_file:str, n_fft:int=1024, hop_length:int=160, target_sample_rate:int=44100, cut:bool=True) -> tuple[np.ndarray, np.ndarray]:
     """Compute the drop curve for a given audio file
 
     Args:
@@ -152,9 +156,49 @@ def compute_drops(audio_file:str, target_file:str, n_fft:int=1024, hop_length:in
     target_indices = target_indices // hop_length
     drop_curve = np.zeros(feature_length)
     drop_curve[target_indices] = 1
-    return drop_curve
+    return drop_curve, target_seconds
     
+def drop_detection(audio_file:str, device, window_size:int = 600, batch_size:int=1000, THRESHOLD:float=0.5, THRESHOLD_HIGH:float=0.7, output_shape:tuple=(64,200)):
+    net = SimpleCNN3(1, 1)
+    net.load_state_dict(torch.load("./utils/current_model.pth", map_location=device, weights_only=True))
+    net = net.to(device)
+    net.eval()
+    transform = [T.MelSpectrogram(sample_rate=22050, n_fft=2048, hop_length=512), hlp.ToDB()]
+    pipeline = AudioPipeline(transform, device)
     
+    y, sr = librosa.load(audio_file, sr=22050)
+    S_dB = pipeline(y)
+    num_win = S_dB.shape[1]-window_size+1
+    assert num_win > 0, f"Window size {window_size} is too large for the number of frames {S_dB.shape[1]}."
+    X = hlp.mel_window_batch_generator(S_dB.reshape(1, 1, S_dB.shape[0], S_dB.shape[1]), window_size, batch_size, num_win)
+    logits_list = []
+    for i, x in enumerate(X):
+        x = x.view(-1, 1, 128, window_size)
+        x = torch.nn.functional.adaptive_avg_pool2d(x, output_shape)
+        x = x.to(device)
+        logits:torch.Tensor = net(x)
+        logits_list.append(logits.detach())
+        
+            
+    logits = torch.cat(logits_list).reshape(1, 1, -1)
+    prob = torch.conv1d(logits, torch.ones((1, 1, window_size), device=device), padding=window_size-1).squeeze().cpu()
+    prob = prob/window_size
+    indices = torch.arange(prob.shape[0])
+    Y_hat = []
+    offset=0
+    while 1:
+        try:
+            start = prob[indices].where(prob[indices]>THRESHOLD, 0).nonzero().min().item() + offset
+            indices = indices[indices>start]
+            stop = prob[indices].where(prob[indices]<THRESHOLD, 0).nonzero().min().item() + start
+            indices = indices[indices>stop]
+            if prob[start:stop].max() > THRESHOLD_HIGH:
+                Y_hat.append(prob[start:stop].argmax()+start)
+            offset = stop
+        except:
+            break
+    
+    return Y_hat, prob
 
 def compute_dynamics(audio_file:str, hop_length:int=160, target_sample_rate:int=44100, cut:bool=True) -> np.ndarray:
     """
