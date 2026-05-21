@@ -34,7 +34,7 @@ from MuseControlLite_setup import (
     StableAudioAttnProcessor2_0_rotary,
     StableAudioAttnProcessor2_0_rotary_double,
 )
-from utils.extract_conditions import compute_dynamics, extract_melody_one_hot, evaluate_f1_rhythm
+from utils.extract_conditions import compute_dynamics, extract_melody_one_hot, evaluate_f1_rhythm, drop_detection, compute_drops
 from sklearn.metrics import f1_score
 from config_training import get_config
 from torch.cuda.amp import autocast
@@ -248,6 +248,7 @@ def log_validation(val_dataloader, condition_extractors, condition_type, pipelin
     score_dynamics = []
     score_melody = []
     score_rhythm = []
+    score_drop = []
     for step, batch in enumerate(val_dataloader):
         if step > config["test_num"]:
             break
@@ -256,11 +257,13 @@ def log_validation(val_dataloader, condition_extractors, condition_type, pipelin
         dynamics_condition = batch["dynamics_condition"].unsqueeze(1)
         rhythm_condition = batch["rhythm_condition"]
         melody_condition = batch["melody_condition"]
+        drop_condition = batch["drop_condition"].unsqueeze(1)
         audio_full_path = batch["audio_full_path"]
         ### conditioned
         extracted_melody_condition = condition_extractors["melody"](melody_condition.to(torch.float32))
         extracted_dynamics_condition = condition_extractors["dynamics"](dynamics_condition.to(torch.float32))
         extracted_rhythm_condition = condition_extractors["rhythm"](rhythm_condition.to(torch.float32))
+        drop_condition = condition_extractors["drop"](drop_condition.to(torch.float32))
         audio_condition = batch["audio"]
         desired_repeats = 192 // 64  # Number of repeats needed
         extracted_audio_condition = audio_condition.repeat_interleave(desired_repeats, dim=1)
@@ -268,28 +271,33 @@ def log_validation(val_dataloader, condition_extractors, condition_type, pipelin
         masked_extracted_melody_condition = torch.full_like(extracted_melody_condition.to(torch.float32), fill_value=0)
         masked_extracted_dynamics_condition = torch.full_like(extracted_dynamics_condition.to(torch.float32), fill_value=0)
         masked_extracted_rhythm_condition = torch.full_like(extracted_rhythm_condition.to(torch.float32), fill_value=0)
+        masked_extracted_drop_condition = torch.full_like(drop_condition.to(torch.float32), fill_value=0)
         masked_extracted_audio_condition = torch.full_like(extracted_audio_condition.to(torch.float32), fill_value=0)
          
         extracted_rhythm_condition = F.interpolate(extracted_rhythm_condition, size=1024, mode='linear', align_corners=False)
         extracted_dynamics_condition = F.interpolate(extracted_dynamics_condition, size=1024, mode='linear', align_corners=False)
         extracted_melody_condition = F.interpolate(extracted_melody_condition, size=1024, mode='linear', align_corners=False)
+        extracted_drop_condition = F.interpolate(drop_condition, size=1024, mode='linear', align_corners=False)
         masked_extracted_rhythm_condition = F.interpolate(masked_extracted_rhythm_condition, size=1024, mode='linear', align_corners=False)
         masked_extracted_dynamics_condition = F.interpolate(masked_extracted_dynamics_condition, size=1024, mode='linear', align_corners=False)
         masked_extracted_melody_condition = F.interpolate(masked_extracted_melody_condition, size=1024, mode='linear', align_corners=False)
+        masked_extracted_drop_condition = F.interpolate(masked_extracted_drop_condition, size=1024, mode='linear', align_corners=False)
         # concat conditions
         if step < 3:
             extracted_rhythm_condition[:,:,:512] = 0
             extracted_melody_condition[:,:,:512] = 0
             extracted_dynamics_condition[:,:,:512] = 0
+            extracted_drop_condition[:,:,:512] = 0
             extracted_audio_condition[:,:,512:] = 0
         elif step < 6:
             extracted_rhythm_condition[:,:,512:] = 0
             extracted_melody_condition[:,:,512:] = 0
             extracted_dynamics_condition[:,:,512:] = 0
+            extracted_drop_condition[:,:,512:] = 0
             extracted_audio_condition[:,:,:512] = 0
         # extracted_audio_condition[:,:,:] = 0 # pause audio condition
-        extracted_condition = torch.concat((extracted_rhythm_condition, extracted_dynamics_condition, extracted_melody_condition, extracted_audio_condition), dim=1)
-        masked_extracted_condition = torch.concat((masked_extracted_rhythm_condition, masked_extracted_dynamics_condition, masked_extracted_melody_condition, masked_extracted_audio_condition), dim=1)
+        extracted_condition = torch.concat((extracted_rhythm_condition, extracted_dynamics_condition, extracted_melody_condition, extracted_drop_condition, extracted_audio_condition), dim=1)
+        masked_extracted_condition = torch.concat((masked_extracted_rhythm_condition, masked_extracted_dynamics_condition, masked_extracted_melody_condition, masked_extracted_drop_condition, masked_extracted_audio_condition), dim=1)
         extracted_condition = torch.concat((masked_extracted_condition, masked_extracted_condition, extracted_condition), dim=0)
         extracted_condition = extracted_condition.transpose(1, 2)
         generator = torch.Generator("cuda").manual_seed(0)
@@ -310,6 +318,7 @@ def log_validation(val_dataloader, condition_extractors, condition_type, pipelin
         dynamics_condition = dynamics_condition[0].detach().cpu().numpy()
         rhythm_condition = rhythm_condition[0].detach().cpu().numpy()
         melody_condition = melody_condition[0].detach().cpu().numpy()
+        drop_condition = drop_condition[0].detach().cpu().numpy()
         output = audio[0].T.float().cpu().numpy()
         gen_file = os.path.join(val_audio_dir, f"validation_{step}.wav")
         original_file = os.path.join(val_audio_dir, f"original_{step}.wav")
@@ -395,16 +404,58 @@ def log_validation(val_dataloader, condition_extractors, condition_type, pipelin
             plt.close()
         if "drop" in condition_type:
             #TODO: add drop curve evaluation and visualization
-            pass
+            #get target timestamps
+            _, targets = compute_drops(audio_full_path[0], config['drop_label_file'])
+            
+            #inference on generated audio and get timestamps
+            y_hat, prob = drop_detection(gen_file, device="cuda")
+            #get mse loss and visualize
+            if len(targets) == 1:
+                # only one drop in the audio, calculate mse loss to all predicted drops
+                if len(y_hat) > 0:
+                    mse_loss = F.mse_loss(torch.tensor(y_hat), torch.tensor(targets[0]))
+                else:
+                    mse_loss = torch.tensor(1000.0) # if no drop is detected, assign a high loss
+            else:
+                #more than one drop in the audio, find the best matching between predicted drops and target drops, and calculate mse loss
+                if len(y_hat) > 0:
+                    mse_loss_matrix = torch.zeros((len(y_hat), len(targets)))
+                    for i in range(len(y_hat)):
+                        for j in range(len(targets)):
+                            mse_loss_matrix[i][j] = F.mse_loss(torch.tensor(y_hat[i]), torch.tensor(targets[j]))
+                    # find the best matching using Hungarian algorithm
+                    from scipy.optimize import linear_sum_assignment
+                    row_ind, col_ind = linear_sum_assignment(mse_loss_matrix)
+                    mse_loss = mse_loss_matrix[row_ind, col_ind].mean() #TODO: Test
+                else:
+                    mse_loss = torch.tensor(1000.0)*len(targets) # if no drop is detected, assign a high loss
+                    
+            # visualize drop detection results
+            fig, ax = plt.subplots(1, 1, figsize=(10, 8))
+            ax.set_ylim(0, 1)
+            ax.set_xlim(0, prob.shape[0])
+            ax.vlines(targets, ymin=ax.get_ylim()[0], ymax=ax.get_ylim()[1], colors="g")
+            ax.plot(prob)
+            ax.vlines(y_hat, ymin=ax.get_ylim()[0], ymax=ax.get_ylim()[1], colors="r")
+            ax.set_title(f"Drop Detection (Green: Target Drops, Red: Detected Drops, MSE Loss: {mse_loss.item():.2f})")
+            ax.set_xlabel("Time (seconds)")
+            ax.set_ylabel("Probability")
+            plt.tight_layout()
+            plt.savefig(os.path.join(val_audio_dir, f"compare_drop_{step}.png"))
+            plt.close()
+            
+            print("mse_loss_drop", mse_loss.item())
+            score_drop.append(mse_loss.item())
         discription_path = os.path.join(val_audio_dir, "description.txt")
         with open(discription_path, 'a') as file:
             file.write(f'{prompt_texts}\n')
     print("score_dynamics", np.mean(score_dynamics))
     print("score_melody", np.mean(score_melody))
     print("score_rhythm", np.mean(score_rhythm))
+    print("score_drop", np.mean(score_drop))
     torch.cuda.empty_cache()
     gc.collect()
-    return np.mean(score_dynamics), np.mean(score_melody), np.mean(score_rhythm)
+    return np.mean(score_dynamics), np.mean(score_melody), np.mean(score_rhythm), np.mean(score_drop)
 def get_alphas_sigmas(t):
     """Returns the scaling factors for the clean image (alpha) and for the
     noise (sigma), given a timestep."""
@@ -494,6 +545,7 @@ def main():
     print(config["attn_processor_type"])
     # Get the processor classes based on the type
     attn_processor = processor_classes.get(config["attn_processor_type"], None)
+    assert attn_processor is not None, f"Unsupported attention processor type: {config['attn_processor_type']}. Supported types are: {list(processor_classes.keys())}"
     attn_procs = {}
     for name in transformer.attn_processors.keys():
         if name.endswith("attn1.processor"):
@@ -503,7 +555,7 @@ def main():
                 layer_id = name.split(".")[1],
                 hidden_size=768,
                 name=name,
-                cross_attention_dim=768,
+                cross_attention_dim=960,
                 scale=config['ap_scale'],
             ).to("cuda", dtype=torch.float32)
     # Load checkpoint
@@ -566,13 +618,14 @@ def main():
         num_workers=config["dataloader_num_workers"],
         pin_memory=True,
         prefetch_factor=1,
+        persistent_workers=True
     )
     val_dataloader = DataLoader(
         val_dataset,
         batch_size=1,
         shuffle=True,
         collate_fn=val_collate_fn,
-        num_workers=config["dataloader_num_workers"],
+        num_workers=0,
         pin_memory=True,
     )
 
@@ -620,13 +673,14 @@ def main():
     global_step = 0
     first_epoch = 0
     score_melody = 0
+    score_drop = 0
     # Only show the progress bar once on each machine.
+    print("log_validation_first", config["log_first"])
     progress_bar = tqdm(range(global_step, config["max_train_steps"]), disable=not accelerator.is_local_main_process)
     progress_bar.set_description("Steps")
-    print("log_validation_first", config["log_first"])
     score_dynamics, score_melody, score_rhythm = 0, 0, 0
     if config["log_first"] and accelerator.is_main_process:
-        score_dynamics, score_melody, score_rhythm = log_validation(val_dataloader,
+        score_dynamics, score_melody, score_rhythm, score_drop = log_validation(val_dataloader,
                             condition_extractors,
                             config["condition_type"],
                             pipeline, config, weight_dtype, global_step
@@ -662,11 +716,14 @@ def main():
                 extracted_rhythm_condition = condition_extractors["rhythm"](rhythm_condition.float())
                 melody_condition = batch["melody_condition"]
                 extracted_melody_condition = condition_extractors["melody"](melody_condition.float())
+                drop_conditon = batch["drop_condition"].unsqueeze(1)
+                extracted_drop_condition = condition_extractors["drop"](drop_conditon.float())
                 desired_repeats = 192 // 64  # Number of repeats needed
                 extracted_audio_condition = latents.repeat_interleave(desired_repeats, dim=1)
                 extracted_rhythm_condition = F.interpolate(extracted_rhythm_condition, size=1024, mode='linear', align_corners=False)
                 extracted_dynamics_condition = F.interpolate(extracted_dynamics_condition, size=1024, mode='linear', align_corners=False)
                 extracted_melody_condition = F.interpolate(extracted_melody_condition, size=1024, mode='linear', align_corners=False)
+                extracted_drop_condition = F.interpolate(extracted_drop_condition, size=1024, mode='linear', align_corners=False)
                 for i in range(len(prompt_texts)):
                     rand_num = random.random()
                     num1, num2 = random.sample(range(1024), 2)
@@ -679,7 +736,8 @@ def main():
                         extracted_melody_condition[i] = torch.zeros_like(extracted_melody_condition[i])
                         extracted_rhythm_condition[i] = torch.zeros_like(extracted_rhythm_condition[i])
                         extracted_dynamics_condition[i] = torch.zeros_like(extracted_dynamics_condition[i])
-                        extracted_audio_condition[i] = torch.zeros_like(extracted_audio_condition[i])                  
+                        extracted_audio_condition[i] = torch.zeros_like(extracted_audio_condition[i])
+                        extracted_drop_condition[i] = torch.zeros_like(extracted_drop_condition[i])
                     elif rand_num < 0.55:
                         ## 0~num1 : melody, rhythm, dynamics or blank
                         ## num1~num2 : audio or blank
@@ -698,6 +756,10 @@ def main():
                             extracted_dynamics_condition[i][:, num1 : num2] = 0
                         else:
                             extracted_dynamics_condition[i][:,:] = 0
+                        if random.random() < 0.5:
+                            extracted_drop_condition[i][:, num1 : num2] = 0
+                        else:
+                            extracted_drop_condition[i][:,:] = 0
                         if random.random() < 0.9:
                             extracted_audio_condition[i][:,  : num1] = 0
                             extracted_audio_condition[i][:, num2 : ] = 0
@@ -724,13 +786,18 @@ def main():
                             extracted_dynamics_condition[i][:, num2 : ] = 0
                         else:
                             extracted_dynamics_condition[i][:,:] = 0
+                        if random.random() < 0.5:
+                            extracted_drop_condition[i][:,  : num1] = 0
+                            extracted_drop_condition[i][:, num2 : ] = 0
+                        else:
+                            extracted_drop_condition[i][:,:] = 0
                         if random.random() < 0.9:
                             extracted_audio_condition[i][:, num1: num2] = 0
                         else:
                             extracted_audio_condition[i][:, : ] = 0
                 if "audio" not in config['condition_type']:
                     extracted_audio_condition[:,:,:] = 0
-                    print("not using auio")
+                    #print("not using audio")
                 with torch.no_grad():
                     prompt_embeds = pipeline.encode_prompt(
                         prompt=prompt_texts,
@@ -753,7 +820,7 @@ def main():
                 text_audio_duration_embeds = torch.cat(
                     [prompt_embeds, seconds_start_hidden_states, seconds_end_hidden_states], dim=1
                 ) 
-                extracted_condition = torch.concat((extracted_rhythm_condition, extracted_dynamics_condition, extracted_melody_condition, extracted_audio_condition), dim=1)
+                extracted_condition = torch.concat((extracted_rhythm_condition, extracted_dynamics_condition, extracted_melody_condition, extracted_audio_condition, extracted_drop_condition), dim=1)
                 extracted_condition = extracted_condition.transpose(1, 2)
                 # This rotary_embedding is for self attention layers in Stable-audio 
                 rotary_embed_dim = pipeline.transformer.config.attention_head_dim // 2
@@ -803,12 +870,12 @@ def main():
                         # logger.info(f"Saved state to {save_path}")
 
                     if global_step % config["validation_steps"] == 0:
-                        score_dynamics, score_melody, score_rhythm = log_validation(val_dataloader,
+                        score_dynamics, score_melody, score_rhythm, score_drop = log_validation(val_dataloader,
                             condition_extractors,
                             config["condition_type"],
                             pipeline, config, weight_dtype, global_step
                         )
-            logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0], "score_melody": score_melody, "score_dynamics": score_dynamics, "score_rhythm": score_rhythm}
+            logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0], "score_melody": score_melody, "score_dynamics": score_dynamics, "score_rhythm": score_rhythm, "score_drop": score_drop}
             progress_bar.set_postfix(**logs)
             accelerator.log(logs, step=global_step)
 

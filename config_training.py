@@ -2,25 +2,28 @@ def get_config():
     return {
         # Load files and checkpoints
 
-        "condition_type": ["melody"], #["melody", "rhythm", "dynamics", "drop"], #"melody", "rhythm", "dynamics", "audio", "drop"
+        "condition_type": ["melody", "rhythm", "dynamics", "drop"], #"melody", "rhythm", "dynamics", "audio", "drop"
 
-        "meta_data_path": "./mtg_full_47s_conditions/filtered_vocal_all_caption_with_conditions.json",
+        "meta_data_path": "./test_condition.json",
 
         "audio_data_dir": "D:/Datasets/drops-47s/house/",
 
         "audio_codec_root": "D:/Datasets/drops-47s/house/",
+        
+        "drop_label_file": "D:/Datasets/jamendo_labels.csv",
 
         "output_dir": "./checkpoints/stable_audio_all_condition",
 
         "transformer_ckpt": None, #"./checkpoints/stable_audio_melody_wo_SDD/checkpoint-5000/model_1.safetensors",
 
         "extractor_ckpt": {
-             #"dynamics": "./checkpoints/110000_musical_44000_audio/model_1.safetensors",
-             #"melody": "./checkpoints/stable_audio_melody_wo_SDD/checkpoint-5000/model.safetensors",
-             #"rhythm": "./checkpoints/110000_musical_44000_audio/model_2.safetensors",
+             "dynamics": "./checkpoints/stable_audio_all_condition/checkpoint-7000/model_1.safetensors",
+             "melody": "./checkpoints/stable_audio_all_condition/checkpoint-7000/model.safetensors",
+             "rhythm": "./checkpoints/stable_audio_all_condition/checkpoint-7000/model_2.safetensors",
+             "drop": "./checkpoints/stable_audio_all_condition/checkpoint-7000/model_3.safetensors",
         },
 
-        "wand_run_name": "test",
+        "wand_run_name": "test_all_condition",
 
         # training hyperparameters
         "GPU_id" : "0",
@@ -31,7 +34,7 @@ def get_config():
 
         "attn_processor_type": "rotary", # "rotary", "rotary_conv_in", "absolute" 
 
-        "gradient_accumulation_steps": 1,
+        "gradient_accumulation_steps": 16,
 
         "max_train_steps": 200000,
 
@@ -48,9 +51,9 @@ def get_config():
         "weight_decay": 1e-2,
 
         #config for validation
-        "validation_num": 30,
+        "validation_num": 1, # 500
 
-        "test_num": 5,
+        "test_num": 1, #5
 
         "ap_scale": 1.0,
 
@@ -64,7 +67,7 @@ def get_config():
 
         "denoise_step": 50,
 
-        "log_first": False,
+        "log_first": True,
 
         "sigma_min": 0.3,
 
