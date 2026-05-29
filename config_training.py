@@ -12,29 +12,36 @@ def get_config():
         
         "drop_label_file": "D:/Datasets/jamendo_labels.csv",
 
-        "output_dir": "./checkpoints/stable_audio_all_condition",
+        "output_dir": "./checkpoints/stable_audio_drop_only_run00/",
 
-        "transformer_ckpt": None, #"./checkpoints/stable_audio_melody_wo_SDD/checkpoint-5000/model_1.safetensors",
+        "transformer_ckpt": None, #"./checkpoints/stable_audio_all_condition_run11/checkpoint-11500/model_4.safetensors", #"./checkpoints/woSDD-all/model_3.safetensors",
 
         "extractor_ckpt": {
-             "dynamics": "./checkpoints/stable_audio_all_condition/checkpoint-7000/model_1.safetensors",
-             "melody": "./checkpoints/stable_audio_all_condition/checkpoint-7000/model.safetensors",
-             "rhythm": "./checkpoints/stable_audio_all_condition/checkpoint-7000/model_2.safetensors",
-             "drop": "./checkpoints/stable_audio_all_condition/checkpoint-7000/model_3.safetensors",
+             #"dynamics": "./checkpoints/stable_audio_all_condition_run11/checkpoint-11500/model_1.safetensors",
+             #"melody": "./checkpoints/stable_audio_all_condition_run11/checkpoint-11500/model.safetensors",
+             #"rhythm": "./checkpoints/stable_audio_all_condition_run11/checkpoint-11500/model_2.safetensors",
+             #"drop": "./checkpoints/stable_audio_all_condition_run11/checkpoint-11500/model_3.safetensors",
         },
+        
+        "train_melody_extractor": False,
+        "train_dynamics_extractor": False,
+        "train_rhythm_extractor": False,
+        "train_drop_extractor": True,
 
-        "wand_run_name": "test_all_condition",
+        "wand_run_name": "test_drop_only",
+        
+        "start_step": 1000,
 
         # training hyperparameters
         "GPU_id" : "0",
 
-        "train_batch_size": 1,
+        "train_batch_size": 3,
 
         "learning_rate": 1e-4,
 
         "attn_processor_type": "rotary", # "rotary", "rotary_conv_in", "absolute" 
 
-        "gradient_accumulation_steps": 16,
+        "gradient_accumulation_steps": 42,
 
         "max_train_steps": 200000,
 
@@ -51,9 +58,9 @@ def get_config():
         "weight_decay": 1e-2,
 
         #config for validation
-        "validation_num": 1, # 500
+        "validation_num": 500,
 
-        "test_num": 1, #5
+        "test_num": 5,
 
         "ap_scale": 1.0,
 
@@ -63,7 +70,7 @@ def get_config():
 
         "checkpointing_steps": 500,
 
-        "validation_steps": 500,
+        "validation_steps": 1000,
 
         "denoise_step": 50,
 
