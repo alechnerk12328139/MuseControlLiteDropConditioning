@@ -14,6 +14,29 @@ from torch import nn
 import numpy as np
 import librosa
 from scipy.signal import savgol_filter
+import matplotlib.pyplot as plt
+import matplotlib.figure
+import matplotlib.axes
+from matplotlib.ticker import FormatStrFormatter
+
+def plot_mel_spectrum(file:str, fig:matplotlib.figure.Figure|None = None, ax:matplotlib.axes.Axes|None = None):
+    (y, sr) = librosa.load(file)
+
+    ##Create MelSpectogram
+    librosa.feature.melspectrogram(y=y, sr=sr)
+
+    D = np.abs(librosa.stft(y))**2
+    S = librosa.feature.melspectrogram(S=D, sr=sr, hop_length=512)
+
+    ##Plot Spectogram
+    if fig is None or ax is None:
+        #Create Default Plot
+        fig, ax = plt.subplots(figsize=(15,5))
+    S_dB = librosa.power_to_db(S, ref=np.max)
+    img = librosa.display.specshow(S_dB, x_axis='s', y_axis='mel', sr=sr, ax=ax)
+    fig.colorbar(img, ax=ax, format='%+2.0f dB')
+    ax.set(title=f'Mel-frequency spectrogram for {file}')
+    ax.xaxis.set_major_formatter(FormatStrFormatter('%.2f'))
 
 def pad_or_truncate(input_list: list, target_len: int) -> list:
     """Fixes length of input list to fixed target length by either adding 0 values or truncating

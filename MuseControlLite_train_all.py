@@ -45,6 +45,8 @@ import gc
 #torchaudio.set_audio_backend("sox_io")
 import time
 
+import utils.helpers as hlp
+
 class AudioInversionDataset(Dataset):
     def __init__(
         self,
@@ -324,6 +326,14 @@ def log_validation(val_dataloader, condition_extractors, condition_type, pipelin
         original_file = os.path.join(val_audio_dir, f"original_{step}.wav")
         sf.write(gen_file, output, pipeline.vae.sampling_rate)
         shutil.copy(audio_full_path[0], original_file)
+        #Save Mel plot of orignal and generated audio
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
+        hlp.plot_mel_spectrum(gen_file, fig, ax1)
+        hlp.plot_mel_spectrum(original_file, fig, ax2)
+        ax1.set_title('Generated Audio Mel-Spectrum')
+        ax2.set_title('Original Audio Mel-Spectrum')
+        plt.savefig(os.path.join(val_audio_dir, f"compare_mel_spectrum_{step}.png"))
+        plt.close()
         if "dynamics" in condition_type:
             gen_dynamics = compute_dynamics(gen_file)
             original_dynamics = compute_dynamics(original_file)
@@ -403,12 +413,11 @@ def log_validation(val_dataloader, condition_extractors, condition_type, pipelin
             plt.savefig(os.path.join(val_audio_dir, f"compare_rhythm_{step}.png"))
             plt.close()
         if "drop" in condition_type:
-            #TODO: add drop curve evaluation and visualization
             #get target timestamps
             _, targets = compute_drops(audio_full_path[0], config['drop_label_file'])
             
             #inference on generated audio and get timestamps
-            y_hat, prob = drop_detection(gen_file, device="cuda")
+            y_hat, prob = drop_detection(gen_file, device="cuda", THRESHOLD_HIGH=0.5)
             #get mse loss and visualize
             if len(targets) == 1:
                 # only one drop in the audio, calculate mse loss to all predicted drops
@@ -433,13 +442,13 @@ def log_validation(val_dataloader, condition_extractors, condition_type, pipelin
             # visualize drop detection results
             fig, ax = plt.subplots(1, 1, figsize=(10, 8))
             ax.set_ylim(0, 1)
-            ax.set_xlim(0, prob.shape[0])
-            ax.vlines(targets, ymin=ax.get_ylim()[0], ymax=ax.get_ylim()[1], colors="g")
-            ax.plot(prob)
-            ax.vlines(y_hat, ymin=ax.get_ylim()[0], ymax=ax.get_ylim()[1], colors="r")
-            ax.set_title(f"Drop Detection (Green: Target Drops, Red: Detected Drops, MSE Loss: {mse_loss.item():.2f})")
+            ax.vlines(targets, ymin=ax.get_ylim()[0], ymax=ax.get_ylim()[1], label="Target Drops", colors="g")
+            ax.plot(prob[0], prob[1], label="Drop Probability", color='blue')
+            ax.vlines(y_hat, ymin=ax.get_ylim()[0], ymax=ax.get_ylim()[1], label="Detected Drops", colors="r")
+            ax.set_title(f"Drop Detection of {audio_full_path[0]} (Green: Target Drops, Red: Detected Drops, MSE Loss: {mse_loss.item():.2f})")
             ax.set_xlabel("Time (seconds)")
             ax.set_ylabel("Probability")
+            plt.legend()
             plt.tight_layout()
             plt.savefig(os.path.join(val_audio_dir, f"compare_drop_{step}.png"))
             plt.close()
@@ -528,10 +537,17 @@ def main():
         elif "safetensors" in ckpt_path:
             state_dict = load_file(ckpt_path, device="cpu")
         else:
-            raise ValueError("Unsupported checkpoint format. Please provide a .bin or .safetensors file.")
+            print(f"No valid checkpoint found for {conditioner_type} extractor. Skipping loading for this extractor.")
+            continue
         condition_extractors[conditioner_type].load_state_dict(state_dict)
         print(f"load checkpoint from {config['extractor_ckpt']} successfully !")
 
+    # freeze condition extractors based on config
+    condition_extractors["melody"].requires_grad_(config["train_melody_extractor"])
+    condition_extractors["dynamics"].requires_grad_(config["train_dynamics_extractor"])
+    condition_extractors["rhythm"].requires_grad_(config["train_rhythm_extractor"])
+    condition_extractors["drop"].requires_grad_(config["train_drop_extractor"])
+    
     vae.requires_grad_(False)
     text_encoder.requires_grad_(False)
     transformer.requires_grad_(False)
@@ -670,7 +686,7 @@ def main():
                 }
             }
         )
-    global_step = 0
+    global_step = config["start_step"]
     first_epoch = 0
     score_melody = 0
     score_drop = 0

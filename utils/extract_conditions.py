@@ -127,6 +127,10 @@ def compute_drops(audio_file:str, target_file:str, n_fft:int=1024, hop_length:in
         hop_length (int, optional): Length of the hop between STFT frames. Defaults to 160.
         target_sample_rate (int, optional): Target sample rate for the audio. Defaults to 44100.
         cut (bool, optional): Whether to cut the audio to a fixed length. Defaults to True.
+        
+    Returns:
+        drop_curve (numpy.ndarray): The computed drop curve.
+        target_times (numpy.ndarray): The target drop timestamps in seconds.
     """
     # Load audio file
     waveform, original_sample_rate = torchaudio.load(audio_file)
@@ -156,9 +160,25 @@ def compute_drops(audio_file:str, target_file:str, n_fft:int=1024, hop_length:in
     target_indices = target_indices // hop_length
     drop_curve = np.zeros(feature_length)
     drop_curve[target_indices] = 1
-    return drop_curve, target_seconds
+    return drop_curve, target_indices/target_sample_rate*hop_length
     
 def drop_detection(audio_file:str, device, window_size:int = 600, batch_size:int=1000, THRESHOLD:float=0.5, THRESHOLD_HIGH:float=0.7, output_shape:tuple=(64,200)):
+    """
+    Runs the drop detection network over the given audio file
+
+    Args:
+        audio_file (str): path to the audio file
+        device (torch.Device): the device to run the model on (e.g., "cuda" or "cpu")
+        window_size (int, optional): Window size for the sliding window. Defaults to 600.
+        batch_size (int, optional): Batch size for window generating. Defaults to 1000.
+        THRESHOLD (float, optional): Threshold for drop splitting. If the probability drops below this value, it is considered a differnt drop from the maximum before. Defaults to 0.5.
+        THRESHOLD_HIGH (float, optional): Threshold for the local maxima to be considered as drops. Defaults to 0.7.
+        output_shape (tuple, optional): Output shape for the adaptive average pooling before input into the network. Defaults to (64,200).
+
+    Returns:
+        Y_hat_seconds (numpy.ndarray): Detected drop timestamps in seconds.
+        prob_mapping (numpy.ndarray): A 2D array where the first row contains time in seconds and the second row contains the corresponding drop probabilities.
+    """
     net = SimpleCNN3(1, 1)
     net.load_state_dict(torch.load("./utils/current_model.pth", map_location=device, weights_only=True))
     net = net.to(device)
@@ -197,8 +217,15 @@ def drop_detection(audio_file:str, device, window_size:int = 600, batch_size:int
             offset = stop
         except:
             break
+        
+    # convert to seconds:
+    indices_to_seconds = 512 / 22050
+    Y_hat_seconds = np.array(Y_hat)*indices_to_seconds
     
-    return Y_hat, prob
+    prob_indices = np.arange(prob.shape[0])
+    prob_seconds = prob_indices*indices_to_seconds
+    prob_mapping = np.vstack((prob_seconds, prob.cpu().numpy()))
+    return Y_hat_seconds, prob_mapping
 
 def compute_dynamics(audio_file:str, hop_length:int=160, target_sample_rate:int=44100, cut:bool=True) -> np.ndarray:
     """
