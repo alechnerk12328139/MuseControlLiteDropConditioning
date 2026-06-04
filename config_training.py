@@ -2,25 +2,25 @@ def get_config():
     return {
         # Load files and checkpoints
 
-        "condition_type": ["melody", "rhythm", "dynamics", "drop"], #"melody", "rhythm", "dynamics", "audio", "drop"
+        "condition_type": ["drop",], #"melody", "rhythm", "dynamics", "audio", "drop"
 
-        "meta_data_path": "./test_condition.json",
+        "meta_data_path": "./test_condition_s4.json",
 
-        "audio_data_dir": "D:/Datasets/drops-47s/house/",
+        "audio_data_dir": "/var/home/drops-47s/house/",
 
-        "audio_codec_root": "D:/Datasets/drops-47s/house/",
+        "audio_codec_root": "/var/home/drops-47s/house/",
         
-        "drop_label_file": "D:/Datasets/jamendo_labels.csv",
+        "drop_label_file": "./jamendo_labels.csv",
 
-        "output_dir": "./checkpoints/stable_audio_drop_only_run00/",
+        "output_dir": "./checkpoints/stable_audio_drop_only_run03/",
 
-        "transformer_ckpt": None, #"./checkpoints/stable_audio_all_condition_run11/checkpoint-11500/model_4.safetensors", #"./checkpoints/woSDD-all/model_3.safetensors",
+        "transformer_ckpt": "./checkpoints/stable_audio_drop_only_run02/checkpoint-4000/model_1.safetensors", #"./checkpoints/woSDD-all/model_3.safetensors",
 
         "extractor_ckpt": {
              #"dynamics": "./checkpoints/stable_audio_all_condition_run11/checkpoint-11500/model_1.safetensors",
              #"melody": "./checkpoints/stable_audio_all_condition_run11/checkpoint-11500/model.safetensors",
              #"rhythm": "./checkpoints/stable_audio_all_condition_run11/checkpoint-11500/model_2.safetensors",
-             #"drop": "./checkpoints/stable_audio_all_condition_run11/checkpoint-11500/model_3.safetensors",
+             "drop": "./checkpoints/stable_audio_drop_only_run02/checkpoint-4000/model.safetensors",
         },
         
         "train_melody_extractor": False,
@@ -30,7 +30,7 @@ def get_config():
 
         "wand_run_name": "test_drop_only",
         
-        "start_step": 1000,
+        "start_step": 4000,
 
         # training hyperparameters
         "GPU_id" : "0",
@@ -70,7 +70,7 @@ def get_config():
 
         "checkpointing_steps": 500,
 
-        "validation_steps": 1000,
+        "validation_steps": 500,
 
         "denoise_step": 50,
 
