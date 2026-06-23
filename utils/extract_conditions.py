@@ -13,6 +13,7 @@ import torchaudio
 import librosa
 import numpy as np
 import pandas as pd
+import json
 
 import utils.helpers as hlp
 from utils.drop_detection_network import SimpleCNN3, AudioPipeline
@@ -226,6 +227,57 @@ def drop_detection(audio_file:str, device, window_size:int = 600, batch_size:int
     prob_seconds = prob_indices*indices_to_seconds
     prob_mapping = np.vstack((prob_seconds, prob.cpu().numpy()))
     return Y_hat_seconds, prob_mapping
+
+def compute_segments(audio_file:str, label_file:str, n_fft:int=1024, hop_length:int=160, target_sample_rate:int=44100, cut:bool=True, 
+                     target_encoding:dict = {"buildup": 1, "drop": 2, "breakdown": 3, "cooldown": 4, "bridge": 5, "outro": 6, "end": 7}):
+    # Load audio file
+    waveform, original_sample_rate = torchaudio.load(audio_file)
+    if original_sample_rate != target_sample_rate:
+        resampler = torchaudio.transforms.Resample(orig_freq=original_sample_rate, new_freq=target_sample_rate)
+        waveform = resampler(waveform)
+    if cut:
+        waveform = waveform[:, :2097152]
+        
+    # Calculate length of feature curve
+    feature_length = waveform.size(1) // hop_length
+    
+    with open(label_file, mode="r+") as f:
+        struct_dict_list = json.load(f)
+    audio_chunk_name = os.path.basename(audio_file)
+    
+    regex = re.search(r"(\d+)_chunk(\d+)\.wav", audio_chunk_name) #Chunk files are .wav
+    assert regex is not None, f"Filename {audio_chunk_name} does not match expected pattern."
+    chunk_nr = regex.group(2)
+    start_index = int(chunk_nr) * 2097152 // hop_length
+    filename = regex.group(1) + ".mp3" # Original files are .mp3
+    
+    struct_dict = next(struct_dict for struct_dict in struct_dict_list if filename in struct_dict["file"])
+    if (len(struct_dict['sections']) < 2):
+        raise RuntimeError(f"Number of segments too low: {struct_dict}")
+    target_label = []
+    target_seconds = []
+    for sections in struct_dict['sections']:
+        target_seconds.append(sections['time'])
+        target_label.append(target_encoding[sections['label']])
+    target_seconds = np.array(target_seconds)
+    #create condition for whole file, then slice chunk
+    target_indices = (target_seconds * target_sample_rate / hop_length).astype(int)
+    #get sizes for condition
+    y, sr_ = torchaudio.load(struct_dict["file"])
+    if sr_ != target_sample_rate:
+        resampler = T.Resample(sr_, target_sample_rate)
+        y = resampler(y)
+    length = y.shape[1] //hop_length
+    dims = len(target_encoding.keys())+1
+    segment_curve = np.zeros((dims, length), dtype=np.float32)
+    #Add intro
+    segment_curve[0, 0:target_indices[0]] = 1.0
+    for i in range(len(target_indices)-1):
+        segment_curve[target_label[i], target_indices[i]:target_indices[i+1]] = 1.0
+    #Add last segment
+    segment_curve[target_label[-1], target_indices[-1]:] = 1.0
+    segment_curve = segment_curve[:, start_index:start_index+(2097152//hop_length)]
+    return segment_curve
 
 def compute_dynamics(audio_file:str, hop_length:int=160, target_sample_rate:int=44100, cut:bool=True) -> np.ndarray:
     """
